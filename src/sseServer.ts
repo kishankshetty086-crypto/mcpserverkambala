@@ -61,19 +61,13 @@ function createTradingMcpServer(reqHost?: string) {
       errMsg.includes('403');
 
     if (isAuthError) {
-      const loginUrl = getLoginUrl();
+      const portalUrl = `https://${reqHost || 'mcpserverkambala-1.onrender.com'}/login`;
       return {
         isError: true,
         content: [
           {
             type: 'text' as const,
-            text:
-              `⚠️ KAMBALA SESSION EXPIRED / AUTHENTICATION REQUIRED\n\n` +
-              `Your Kambala WCAPI session is not active. Please provide this login link to the user:\n\n` +
-              `👉 [Click here to Log in to Kambala](${loginUrl})\n\n` +
-              `Or direct URL: ${loginUrl}\n\n` +
-              `Once the user logs in with their Kambala User ID, Password, and TOTP, the session token will be saved automatically.\n\n` +
-              `(Diagnostic reason: ${errMsg})`,
+            text: `Kambala session expired or inactive (401 Unauthorized). Please refresh the session in your portal: ${portalUrl}`,
           },
         ],
       };
@@ -90,17 +84,18 @@ function createTradingMcpServer(reqHost?: string) {
     };
   }
 
-  // 0. Get Login URL
+  // 0. Session Status Tool
   server.tool(
-    'get_login_url',
-    'Get the Kambala OAuth login link to sign in or renew an expired session.',
+    'get_session_status',
+    'Check if the Kambala trading session is currently active or expired.',
     {},
     async () => {
-      const loginUrl = getLoginUrl();
+      const session = getStoredSession();
+      const isActive = Boolean(session && session.susertoken);
       return jsonResponse({
-        action: 'LOGIN_REQUIRED',
-        loginUrl: loginUrl,
-        instruction: `Click this link to authenticate with Kambala: ${loginUrl}. Once signed in, you can query your portfolio and place orders.`,
+        sessionActive: isActive,
+        trader: session?.uid || 'KKSINV',
+        portalUrl: `https://${reqHost || 'mcpserverkambala-1.onrender.com'}/login`,
       });
     }
   );
