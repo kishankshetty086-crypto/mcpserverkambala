@@ -290,6 +290,29 @@ function createTradingMcpServer(reqHost?: string) {
   server.server.fallbackRequestHandler = async (request: any) => {
     console.log(`[MCP Fallback] Cleanly handling unmapped method: ${request.method} (id: ${request.id})`);
     logEvent({ method: request.method, id: request.id, body: request.params });
+
+    // Modern 2026-07-28 MCP specification discovery probe
+    if (request.method === 'server/discover') {
+      return {
+        supportedVersions: ['2026-07-28', '2025-11-25', '2024-11-05'],
+        capabilities: {
+          tools: { listChanged: true },
+          resources: { listChanged: true },
+          prompts: { listChanged: true },
+        },
+        serverInfo: {
+          name: 'kambala-trading',
+          version: '1.0.0',
+        },
+        _meta: {
+          'io.modelcontextprotocol/serverInfo': {
+            name: 'kambala-trading',
+            version: '1.0.0',
+          },
+        },
+      };
+    }
+
     if (request.method && request.method.endsWith('/list')) {
       const key = request.method.split('/')[0];
       return { [key]: [] };
