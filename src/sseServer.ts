@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { WcapiClient } from './wcapiClient.js';
 
 const app = express();
+app.set('trust proxy', 1);
 app.use(express.json());
 
 // Enable CORS for Claude Web (claude.ai)
@@ -203,7 +204,11 @@ function createTradingMcpServer() {
   return server;
 }
 
-app.set('trust proxy', 1);
+// Global HTTP Request Logger
+app.use((req, res, next) => {
+  console.log(`[HTTP] ${req.method} ${req.originalUrl}`);
+  next();
+});
 
 // -------------------------------------------------------------
 // SSE ROUTES (FOR CLAUDE CONNECTORS)
@@ -245,14 +250,26 @@ app.get(['/', '/sse', '/mcp'], async (req, res) => {
 // 2. Handle incoming client messages
 app.post(['/', '/messages', '/sse', '/mcp'], async (req, res) => {
   const sessionId = (req.query.sessionId as string) || (req.headers['x-session-id'] as string);
+  console.log(`[POST] Received message for sessionId: ${sessionId}`);
   const transport = sessionId ? transports.get(sessionId) : transports.values().next().value;
 
   if (!transport) {
+    console.warn(`[POST] No active SSE transport found for sessionId: ${sessionId}`);
     res.status(404).json({ error: 'Session not found or expired' });
     return;
   }
 
-  await transport.handlePostMessage(req, res);
+  try {
+    // IMPORTANT: Pass req.body as the 3rd argument (parsedBody).
+    // Otherwise handlePostMessage tries to read the already-consumed req stream, causing HTTP 400!
+    await transport.handlePostMessage(req, res, req.body);
+    console.log(`[POST] Handled message for sessionId: ${sessionId}`);
+  } catch (err: any) {
+    console.error(`[POST] Error in handlePostMessage:`, err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message });
+    }
+  }
 });
 
 // 3. Health check & MCP Discovery routes
