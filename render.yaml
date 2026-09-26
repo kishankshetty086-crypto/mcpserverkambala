@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: kambala-mcp-trading
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm run sse
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: WCAPI_BASE_URL
+        value: https://rama.kambala.co.in
+      - key: WCAPI_PREFIX
+        value: /NorenWClientWeb
+      - key: CLIENT_ID
+        value: KKSINV_U
+      - key: SECRET_KEY
+        sync: false
+      - key: SUSERTOKEN
+        sync: false
+      - key: TRADER_UID
+        value: KKSINV
+      - key: PORT
+        value: 10000

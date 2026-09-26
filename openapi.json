@@ -1,0 +1,300 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Kambala Trading Gateway",
+    "description": "Enables ChatGPT to query live portfolio, account limits, market data, and place verified trading orders via Kambala OMS/RMS.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://YOUR_SERVER_OR_TUNNEL_URL",
+      "description": "Production or Tunnel Server URL"
+    }
+  ],
+  "paths": {
+    "/api/limits": {
+      "get": {
+        "operationId": "getAccountLimits",
+        "summary": "Get account funds, cash balance, and available margin limits",
+        "description": "Returns total available cash, margin used, and collateral limits for trading.",
+        "responses": {
+          "200": {
+            "description": "Account limits and margin balance"
+          }
+        }
+      }
+    },
+    "/api/holdings": {
+      "get": {
+        "operationId": "getHoldings",
+        "summary": "Get long-term Demat equity portfolio holdings",
+        "description": "Returns list of shares held in Demat account with quantities and current valuations.",
+        "responses": {
+          "200": {
+            "description": "Holdings array"
+          }
+        }
+      }
+    },
+    "/api/positions": {
+      "get": {
+        "operationId": "getPositions",
+        "summary": "Get open intraday and F&O positions",
+        "description": "Returns real-time open positions, net quantity, MTM, and realized/unrealized P&L.",
+        "responses": {
+          "200": {
+            "description": "Positions array"
+          }
+        }
+      }
+    },
+    "/api/orders": {
+      "get": {
+        "operationId": "getOrderBook",
+        "summary": "Get today order book",
+        "description": "Returns all orders placed today with status (Pending, Traded, Rejected, Cancelled).",
+        "responses": {
+          "200": {
+            "description": "Order book array"
+          }
+        }
+      }
+    },
+    "/api/search": {
+      "get": {
+        "operationId": "searchSymbols",
+        "summary": "Search for stocks or contracts across exchanges",
+        "description": "Finds scrip tokens and trading symbols on NSE, BSE, NFO, MCX.",
+        "parameters": [
+          {
+            "name": "exchange",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "NSE",
+                "BSE",
+                "NFO",
+                "MCX"
+              ]
+            },
+            "description": "Exchange"
+          },
+          {
+            "name": "keyword",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Symbol or company name (e.g. RELIANCE)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of matching symbols and tokens"
+          }
+        }
+      }
+    },
+    "/api/quote": {
+      "get": {
+        "operationId": "getMarketQuote",
+        "summary": "Get live market quote",
+        "description": "Returns live LTP, open, high, low, close for an instrument token.",
+        "parameters": [
+          {
+            "name": "exchange",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "NSE",
+                "BSE",
+                "NFO",
+                "MCX"
+              ]
+            },
+            "description": "Exchange"
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Scrip token from search (e.g. 2885)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Live quote data"
+          }
+        }
+      }
+    },
+    "/api/check-margin": {
+      "post": {
+        "operationId": "checkOrderMargin",
+        "summary": "Simulate margin required before placing an order",
+        "description": "Verifies if account has sufficient margin before placing an order.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "exchange",
+                  "tradingSymbol",
+                  "quantity",
+                  "price",
+                  "product",
+                  "transactionType",
+                  "priceType"
+                ],
+                "properties": {
+                  "exchange": {
+                    "type": "string",
+                    "enum": [
+                      "NSE",
+                      "BSE",
+                      "NFO",
+                      "MCX"
+                    ]
+                  },
+                  "tradingSymbol": {
+                    "type": "string",
+                    "description": "Trading symbol (e.g. RELIANCE-EQ)"
+                  },
+                  "quantity": {
+                    "type": "number",
+                    "description": "Quantity of shares"
+                  },
+                  "price": {
+                    "type": "number",
+                    "description": "Price (0 for Market)"
+                  },
+                  "product": {
+                    "type": "string",
+                    "enum": [
+                      "C",
+                      "M",
+                      "I",
+                      "F"
+                    ],
+                    "description": "C (Delivery), I (Intraday), M (Margin)"
+                  },
+                  "transactionType": {
+                    "type": "string",
+                    "enum": [
+                      "B",
+                      "S"
+                    ],
+                    "description": "B (Buy), S (Sell)"
+                  },
+                  "priceType": {
+                    "type": "string",
+                    "enum": [
+                      "LMT",
+                      "MKT",
+                      "SL-LMT"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Calculated margin"
+          }
+        }
+      }
+    },
+    "/api/place-order": {
+      "post": {
+        "operationId": "placeOrder",
+        "summary": "Execute a verified trading order to OMS/RMS",
+        "description": "Places a confirmed buy/sell order through Kambala OMS/RMS. MUST ONLY BE CALLED AFTER EXPLICIT USER CONFIRMATION IN CHAT.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "exchange",
+                  "tradingSymbol",
+                  "quantity",
+                  "price",
+                  "product",
+                  "transactionType",
+                  "priceType"
+                ],
+                "properties": {
+                  "exchange": {
+                    "type": "string",
+                    "enum": [
+                      "NSE",
+                      "BSE",
+                      "NFO",
+                      "MCX"
+                    ]
+                  },
+                  "tradingSymbol": {
+                    "type": "string",
+                    "description": "Trading symbol (e.g. RELIANCE-EQ)"
+                  },
+                  "quantity": {
+                    "type": "number",
+                    "description": "Quantity of shares"
+                  },
+                  "price": {
+                    "type": "number",
+                    "description": "Price (0 for Market)"
+                  },
+                  "product": {
+                    "type": "string",
+                    "enum": [
+                      "C",
+                      "M",
+                      "I",
+                      "F"
+                    ],
+                    "description": "C (Delivery), I (Intraday), M (Margin)"
+                  },
+                  "transactionType": {
+                    "type": "string",
+                    "enum": [
+                      "B",
+                      "S"
+                    ],
+                    "description": "B (Buy), S (Sell)"
+                  },
+                  "priceType": {
+                    "type": "string",
+                    "enum": [
+                      "LMT",
+                      "MKT",
+                      "SL-LMT"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Order placement result with norenordno"
+          }
+        }
+      }
+    }
+  }
+}
