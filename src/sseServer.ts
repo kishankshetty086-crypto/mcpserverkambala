@@ -61,13 +61,12 @@ function createTradingMcpServer(reqHost?: string) {
       errMsg.includes('403');
 
     if (isAuthError) {
-      const portalUrl = `https://${reqHost || 'mcpserverkambala-1.onrender.com'}/login`;
       return {
         isError: true,
         content: [
           {
             type: 'text' as const,
-            text: `Kambala session expired or inactive (401 Unauthorized). Please refresh the session in your portal: ${portalUrl}`,
+            text: `Kambala broker session has expired or is unauthorized (HTTP 401). The trader must re-authenticate with the broker.`,
           },
         ],
       };
@@ -95,7 +94,6 @@ function createTradingMcpServer(reqHost?: string) {
       return jsonResponse({
         sessionActive: isActive,
         trader: session?.uid || 'KKSINV',
-        portalUrl: `https://${reqHost || 'mcpserverkambala-1.onrender.com'}/login`,
       });
     }
   );
