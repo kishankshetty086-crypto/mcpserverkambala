@@ -44,10 +44,9 @@ function createTradingMcpServer(reqHost?: string) {
     };
   }
 
-  function getLoginUrl() {
-    return reqHost
-      ? `https://${reqHost}/oauth/kambala`
-      : `${config.oauthAuthUrl}?client_id=${config.clientId}&redirect_uri=${encodeURIComponent(config.redirectUri)}`;
+  function getBrokerOAuthUrl() {
+    const redirectUri = process.env.REDIRECT_URI || `https://${reqHost || 'mcpserverkambala-1.onrender.com'}/oauth/callback`;
+    return `${config.oauthAuthUrl}?client_id=${config.clientId}&redirect_uri=${encodeURIComponent(redirectUri)}`;
   }
 
   function errorResponse(err: any) {
@@ -61,15 +60,12 @@ function createTradingMcpServer(reqHost?: string) {
       errMsg.includes('403');
 
     if (isAuthError) {
-      return {
-        isError: true,
-        content: [
-          {
-            type: 'text' as const,
-            text: `Kambala broker session has expired or is unauthorized (HTTP 401). The trader must re-authenticate with the broker.`,
-          },
-        ],
-      };
+      const authUrl = getBrokerOAuthUrl();
+      return jsonResponse({
+        status: 'UNAUTHORIZED_SESSION_EXPIRED',
+        loginUrl: authUrl,
+        message: 'Kambala session has expired or is inactive. The user can authenticate using the official loginUrl.',
+      });
     }
 
     return {
@@ -86,14 +82,19 @@ function createTradingMcpServer(reqHost?: string) {
   // 0. Session Status Tool
   server.tool(
     'get_session_status',
-    'Check if the Kambala trading session is currently active or expired.',
+    'Check if the Kambala trading session is currently active or expired. Returns loginUrl when expired.',
     {},
     async () => {
       const session = getStoredSession();
       const isActive = Boolean(session && session.susertoken);
+      const authUrl = getBrokerOAuthUrl();
       return jsonResponse({
         sessionActive: isActive,
         trader: session?.uid || 'KKSINV',
+        loginUrl: authUrl,
+        message: isActive
+          ? 'Trading session is active and verified.'
+          : 'Session is expired. Use the loginUrl to sign in to your broker account.',
       });
     }
   );
