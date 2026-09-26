@@ -1,6 +1,8 @@
 import express from 'express';
+import { randomUUID } from 'crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import { WcapiClient } from './wcapiClient.js';
 import { getStoredSession, saveSession, exchangeCodeForToken } from './auth.js';
@@ -345,11 +347,38 @@ app.get('/debug/logs', (req, res) => {
 });
 
 // -------------------------------------------------------------
-// SSE ROUTES (FOR CLAUDE CONNECTORS)
+// DUAL TRANSPORT ROUTES
+// Modern Streamable HTTP on /mcp (Claude Web 2026-07-28 protocol)
+// Legacy SSE on /sse (older Claude Desktop / Cursor clients)
 // -------------------------------------------------------------
 
-// 1. Establish SSE Stream (handles /, /sse, /mcp)
-app.get(['/', '/sse', '/mcp'], async (req, res) => {
+// ============ 1. MODERN: Streamable HTTP Transport on /mcp ============
+// Claude Web sends server/discover, initialize, tools/list, tools/call
+// all as POST /mcp with inline SSE responses. This transport handles it natively.
+
+app.all('/mcp', async (req, res) => {
+  console.log(`[MCP Streamable] ${req.method} /mcp`);
+  logEvent({ url: '/mcp', method: req.body?.method || req.method, id: req.body?.id, body: req.body });
+
+  // Create a fresh server + transport per request (stateless mode)
+  const server = createTradingMcpServer(req.get('host'));
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined, // Stateless mode — no session tracking needed
+  });
+
+  // Connect MCP server to transport
+  await server.connect(transport);
+
+  // Let the transport handle the full request lifecycle (GET for SSE stream, POST for messages, DELETE for cleanup)
+  await transport.handleRequest(req, res, req.body);
+});
+
+// ============ 2. LEGACY: SSE Transport on /sse ============
+// Older Claude Desktop versions and some MCP clients use the SSE protocol:
+// GET /sse → opens SSE stream, returns sessionId
+// POST /messages?sessionId=xxx → sends JSON-RPC messages
+
+app.get(['/', '/sse'], async (req, res) => {
   // If GET / is requested by a normal browser without SSE Accept header, return health JSON
   if (req.path === '/' && !req.headers.accept?.includes('text/event-stream')) {
     return res.status(200).json({
@@ -357,9 +386,8 @@ app.get(['/', '/sse', '/mcp'], async (req, res) => {
       name: 'kambala-trading',
       version: '1.0.0',
       auth: 'none',
-      description: 'Kambala Solutions Remote MCP Server for Claude (No Sign-In Required)',
+      description: 'Kambala Solutions Remote MCP Server for Claude',
       endpoints: {
-        root: '/',
         sse: '/sse',
         mcp: '/mcp',
         messages: '/messages',
@@ -367,14 +395,14 @@ app.get(['/', '/sse', '/mcp'], async (req, res) => {
     });
   }
 
-  console.log(`[SSE] New connection from Claude client on ${req.path}`);
+  console.log(`[SSE Legacy] New connection from Claude client on ${req.path}`);
   const server = createTradingMcpServer(req.get('host'));
   const transport = new SSEServerTransport('/messages', res);
 
   transports.set(transport.sessionId, transport);
 
   req.on('close', () => {
-    console.log(`[SSE] Session closed: ${transport.sessionId}`);
+    console.log(`[SSE Legacy] Session closed: ${transport.sessionId}`);
     transports.delete(transport.sessionId);
   });
 
@@ -392,28 +420,26 @@ app.get(['/', '/sse', '/mcp'], async (req, res) => {
   await server.connect(transport);
 });
 
-// 2. Handle incoming client messages
-app.post(['/', '/messages', '/sse', '/mcp'], async (req, res) => {
+// Legacy SSE message handler (for /messages?sessionId=xxx)
+app.post(['/', '/messages', '/sse'], async (req, res) => {
   const sessionId = (req.query.sessionId as string) || (req.headers['x-session-id'] as string);
   const method = req.body?.method || '(unknown method)';
   const id = req.body?.id;
-  console.log(`[POST] Received message for sessionId: ${sessionId}, method: ${method}, id: ${id}`);
+  console.log(`[SSE Legacy POST] sessionId: ${sessionId}, method: ${method}, id: ${id}`);
   logEvent({ url: req.originalUrl, method, id, body: req.body });
   const transport = sessionId ? transports.get(sessionId) : transports.values().next().value;
 
   if (!transport) {
-    console.warn(`[POST] No active SSE transport found for sessionId: ${sessionId}`);
+    console.warn(`[SSE Legacy POST] No active SSE transport found for sessionId: ${sessionId}`);
     res.status(404).json({ error: 'Session not found or expired' });
     return;
   }
 
   try {
-    // IMPORTANT: Pass req.body as the 3rd argument (parsedBody).
-    // Otherwise handlePostMessage tries to read the already-consumed req stream, causing HTTP 400!
     await transport.handlePostMessage(req, res, req.body);
-    console.log(`[POST] Handled message for sessionId: ${sessionId}`);
+    console.log(`[SSE Legacy POST] Handled message for sessionId: ${sessionId}`);
   } catch (err: any) {
-    console.error(`[POST] Error in handlePostMessage:`, err);
+    console.error(`[SSE Legacy POST] Error in handlePostMessage:`, err);
     if (!res.headersSent) {
       res.status(500).json({ error: err.message });
     }
@@ -424,8 +450,11 @@ app.post(['/', '/messages', '/sse', '/mcp'], async (req, res) => {
 app.get('/.well-known/mcp', (req, res) => {
   res.status(200).json({
     mcp_version: '1.0.0',
-    transport: 'sse',
-    endpoint: '/sse',
+    transport: ['streamable-http', 'sse'],
+    endpoints: {
+      'streamable-http': '/mcp',
+      'sse': '/sse',
+    },
     auth: {
       type: 'none',
     },
@@ -582,8 +611,9 @@ app.get('/oauth/callback', async (req, res) => {
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`\n======================================================`);
-  console.log(`  Kambala Remote MCP Server (SSE) Running on Port ${PORT}`);
+  console.log(`  Kambala Remote MCP Server Running on Port ${PORT}`);
   console.log(`  Auth Mode: No sign-in required`);
-  console.log(`  Claude Connector Endpoint: /sse or /mcp`);
+  console.log(`  Modern (Claude Web):  POST /mcp  [Streamable HTTP]`);
+  console.log(`  Legacy  (Desktop):    GET  /sse  [SSE + /messages]`);
   console.log(`======================================================\n`);
 });
