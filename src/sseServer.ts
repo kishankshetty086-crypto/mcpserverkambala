@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { z } from 'zod';
 import { WcapiClient } from './wcapiClient.js';
+import { getStoredSession, saveSession } from './auth.js';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -287,6 +288,71 @@ app.get('/.well-known/mcp', (req, res) => {
 // Explicitly return 404 for OAuth discovery so Claude confirms the server requires NO sign-in
 app.all(['/.well-known/oauth-authorization-server', '/.well-known/openid-configuration', '/.well-known/oauth-protected-resource'], (req, res) => {
   res.status(404).json({ error: 'OAuth not required. This server uses direct authenticated session.' });
+});
+
+// 4. Web Session Manager UI (for cloud deployments like Render)
+app.get('/login', (req, res) => {
+  const session = getStoredSession();
+  const isEnvActive = Boolean(process.env.SUSERTOKEN);
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Kambala MCP - Session Manager</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; }
+        .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 32px; max-width: 520px; width: 100%; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
+        h1 { font-size: 22px; margin-top: 0; color: #38bdf8; display: flex; align-items: center; gap: 8px; }
+        .status { padding: 14px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; line-height: 1.5; }
+        .active { background: #064e3b; color: #6ee7b7; border: 1px solid #059669; }
+        .inactive { background: #450a0a; color: #fca5a5; border: 1px solid #dc2626; }
+        label { display: block; font-size: 13px; color: #94a3b8; margin-top: 14px; margin-bottom: 6px; font-weight: 500; }
+        input { width: 100%; box-sizing: border-box; background: #0f172a; border: 1px solid #475569; border-radius: 6px; padding: 10px 12px; color: #f8fafc; font-size: 14px; }
+        input:focus { border-color: #38bdf8; outline: none; }
+        button { width: 100%; background: #2563eb; color: white; border: none; border-radius: 6px; padding: 12px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 20px; transition: background 0.2s; }
+        button:hover { background: #1d4ed8; }
+        .hint { font-size: 12px; color: #64748b; margin-top: 14px; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <h1>Kambala MCP Session Manager</h1>
+        <div class="status ${session?.susertoken ? 'active' : 'inactive'}">
+          ${session?.susertoken 
+            ? `✓ <strong>Session Active!</strong><br/>Trader: <b>${session.uid || 'KKSINV'}</b> | Token: ${session.susertoken.slice(0, 10)}...${session.susertoken.slice(-6)}${isEnvActive ? ' (via Render Env)' : ''}`
+            : '⚠ <strong>No Active Session</strong><br/>Claude cannot execute trades until a valid Kambala session token is provided.'
+          }
+        </div>
+        <form action="/login" method="POST">
+          <label>Trader User ID (uid)</label>
+          <input name="uid" value="${session?.uid || 'KKSINV'}" required />
+          <label>Trader Account ID (actid)</label>
+          <input name="actid" value="${session?.actid || 'KKSINV'}" required />
+          <label>Kambala susertoken</label>
+          <input name="susertoken" value="${session?.susertoken || ''}" placeholder="Paste 64-char Kambala susertoken" required />
+          <button type="submit">Activate Session</button>
+        </form>
+        <p class="hint">Tip: Setting <code>SUSERTOKEN</code> in Render Dashboard → Environment will persist across all restarts.</p>
+      </div>
+    </body>
+    </html>
+  `);
+});
+
+app.post('/login', express.urlencoded({ extended: true }), (req, res) => {
+  const { susertoken, uid, actid } = req.body;
+  if (!susertoken) {
+    return res.status(400).send('susertoken is required');
+  }
+  saveSession({
+    susertoken: susertoken.trim(),
+    uid: (uid || 'KKSINV').trim(),
+    actid: (actid || 'KKSINV').trim(),
+    loginTime: new Date().toISOString(),
+  });
+  console.log(`[Session] New session activated for user ${uid || 'KKSINV'}`);
+  res.redirect('/login');
 });
 
 const PORT = process.env.PORT || 3001;

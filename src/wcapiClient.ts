@@ -20,12 +20,10 @@ export class WcapiClient {
    * Ensures active session is loaded
    */
   private getAuthSession(): SessionData {
-    if (!this.session) {
-      this.session = getStoredSession();
-    }
+    this.session = getStoredSession();
     if (!this.session || !this.session.susertoken) {
       throw new Error(
-        'Not authenticated with Kambala WCAPI. Please run "npm run login" or complete OAuth login first.'
+        'Not authenticated with Kambala WCAPI. Please set SUSERTOKEN in Render environment or visit /login on this server.'
       );
     }
     return this.session;
