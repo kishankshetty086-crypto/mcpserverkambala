@@ -246,6 +246,46 @@ function createTradingMcpServer(reqHost?: string) {
     }
   );
 
+  // Register system resource & prompt handlers to cleanly satisfy MCP discovery (prompts/list, resources/list)
+  server.resource(
+    'system_overview',
+    'kambala://system/overview',
+    async () => ({
+      contents: [
+        {
+          uri: 'kambala://system/overview',
+          mimeType: 'application/json',
+          text: JSON.stringify(
+            {
+              gateway: 'Kambala Trading MCP Gateway',
+              version: '1.0.0',
+              status: 'operational',
+              supportedExchanges: ['NSE', 'BSE', 'NFO', 'MCX'],
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    })
+  );
+
+  server.prompt(
+    'trading_portfolio_summary',
+    'Generate a full morning summary of portfolio holdings, open positions, and margin limits.',
+    async () => ({
+      messages: [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text: 'Please check my session status, account limits, and demat holdings, and provide a comprehensive trading portfolio overview.',
+          },
+        },
+      ],
+    })
+  );
+
   return server;
 }
 
@@ -306,7 +346,9 @@ app.get(['/', '/sse', '/mcp'], async (req, res) => {
 // 2. Handle incoming client messages
 app.post(['/', '/messages', '/sse', '/mcp'], async (req, res) => {
   const sessionId = (req.query.sessionId as string) || (req.headers['x-session-id'] as string);
-  console.log(`[POST] Received message for sessionId: ${sessionId}`);
+  const method = req.body?.method || '(unknown method)';
+  const id = req.body?.id;
+  console.log(`[POST] Received message for sessionId: ${sessionId}, method: ${method}, id: ${id}`);
   const transport = sessionId ? transports.get(sessionId) : transports.values().next().value;
 
   if (!transport) {
