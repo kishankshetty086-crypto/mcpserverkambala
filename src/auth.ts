@@ -22,10 +22,33 @@ export function generateChecksum(clientId: string, secretKey: string, code: stri
   return crypto.createHash('sha256').update(combined).digest('hex');
 }
 
+let inMemorySession: SessionData | null = null;
+let isSessionInvalidated = false;
+
 /**
- * Returns saved session from local storage if available
+ * Returns saved session from local storage or memory if available
  */
 export function getStoredSession(): SessionData | null {
+  if (isSessionInvalidated) {
+    return null;
+  }
+  if (inMemorySession) {
+    return inMemorySession;
+  }
+  // Check file session first (so dynamic logins take precedence)
+  try {
+    if (fs.existsSync(config.sessionFile)) {
+      const data = fs.readFileSync(config.sessionFile, 'utf-8');
+      const session = JSON.parse(data) as SessionData;
+      if (session && session.susertoken) {
+        inMemorySession = session;
+        return session;
+      }
+    }
+  } catch (error) {
+    console.error('Error reading session file:', error);
+  }
+  // Fall back to environment variable
   if (process.env.SUSERTOKEN) {
     return {
       susertoken: process.env.SUSERTOKEN,
@@ -34,30 +57,36 @@ export function getStoredSession(): SessionData | null {
       loginTime: new Date().toISOString(),
     };
   }
-  try {
-    if (fs.existsSync(config.sessionFile)) {
-      const data = fs.readFileSync(config.sessionFile, 'utf-8');
-      return JSON.parse(data) as SessionData;
-    }
-  } catch (error) {
-    console.error('Error reading session file:', error);
-  }
   return null;
 }
 
 /**
- * Saves active session to local storage
+ * Saves active session to local storage and memory
  */
 export function saveSession(session: SessionData): void {
-  fs.writeFileSync(config.sessionFile, JSON.stringify(session, null, 2), 'utf-8');
+  inMemorySession = session;
+  isSessionInvalidated = false;
+  process.env.SUSERTOKEN = session.susertoken;
+  try {
+    fs.writeFileSync(config.sessionFile, JSON.stringify(session, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Could not write session file (ephemeral filesystem):', e);
+  }
 }
 
 /**
- * Clears current session
+ * Clears current session from memory, env, and disk
  */
 export function clearSession(): void {
-  if (fs.existsSync(config.sessionFile)) {
-    fs.unlinkSync(config.sessionFile);
+  inMemorySession = null;
+  isSessionInvalidated = true;
+  delete process.env.SUSERTOKEN;
+  try {
+    if (fs.existsSync(config.sessionFile)) {
+      fs.unlinkSync(config.sessionFile);
+    }
+  } catch (e) {
+    // ignore
   }
 }
 

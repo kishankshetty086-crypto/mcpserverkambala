@@ -288,6 +288,17 @@ app.get(['/', '/sse', '/mcp'], async (req, res) => {
     transports.delete(transport.sessionId);
   });
 
+  // Verify live broker session upon Claude connectivity
+  client.validateSessionLive().then((status) => {
+    if (status.isValid) {
+      console.log(`[Claude Connected] ✓ Live Kambala session verified for user: ${status.user}`);
+    } else {
+      console.warn(`[Claude Connected] ⚠ Kambala session is inactive/logged out at admin end: ${status.error}`);
+    }
+  }).catch((err) => {
+    console.warn(`[Claude Connected] Session verification error: ${err.message}`);
+  });
+
   await server.connect(transport);
 });
 
@@ -334,9 +345,9 @@ app.all(['/.well-known/oauth-authorization-server', '/.well-known/openid-configu
 });
 
 // 4. Web Session Manager UI (for cloud deployments like Render)
-app.get('/login', (req, res) => {
+app.get('/login', async (req, res) => {
+  const check = await client.validateSessionLive();
   const session = getStoredSession();
-  const isEnvActive = Boolean(process.env.SUSERTOKEN);
   res.send(`
     <!DOCTYPE html>
     <html>
@@ -361,10 +372,10 @@ app.get('/login', (req, res) => {
     <body>
       <div class="card">
         <h1>Kambala MCP Session Manager</h1>
-        <div class="status ${session?.susertoken ? 'active' : 'inactive'}">
-          ${session?.susertoken 
-            ? `✓ <strong>Session Active!</strong><br/>Trader: <b>${session.uid || 'KKSINV'}</b> | Token: ${session.susertoken.slice(0, 10)}...${session.susertoken.slice(-6)}${isEnvActive ? ' (via Render Env)' : ''}`
-            : '⚠ <strong>No Active Session</strong><br/>Claude cannot execute trades until a valid Kambala session token is provided.'
+        <div class="status ${check.isValid ? 'active' : 'inactive'}">
+          ${check.isValid 
+            ? `✓ <strong>Live Session Verified!</strong><br/>Trader: <b>${check.user || session?.uid || 'KKSINV'}</b> | Connected to Kambala OMS/RMS.`
+            : `⚠ <strong>Session Inactive or Logged Out by Admin</strong><br/>${check.error || 'Please authenticate below to enable Claude to trade.'}`
           }
         </div>
         <div style="margin: 20px 0; text-align: center;">

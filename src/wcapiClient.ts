@@ -1,6 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import { config } from './config.js';
-import { getStoredSession, SessionData } from './auth.js';
+import { getStoredSession, clearSession, SessionData } from './auth.js';
 
 export class WcapiClient {
   private http: AxiosInstance;
@@ -23,10 +23,32 @@ export class WcapiClient {
     this.session = getStoredSession();
     if (!this.session || !this.session.susertoken) {
       throw new Error(
-        'Not authenticated with Kambala WCAPI. Please set SUSERTOKEN in Render environment or visit /login on this server.'
+        'Not authenticated with Kambala WCAPI. Session is inactive or logged out at broker end.'
       );
     }
     return this.session;
+  }
+
+  /**
+   * Proactively checks if the stored session is genuinely active with Kambala WCAPI.
+   * If logged out at the admin end or expired, it automatically wipes the dead session.
+   */
+  async validateSessionLive(): Promise<{ isValid: boolean; user?: string; error?: string }> {
+    const stored = getStoredSession();
+    if (!stored || !stored.susertoken) {
+      return { isValid: false, error: 'No session token configured' };
+    }
+    try {
+      const data = await this.getUserDetails();
+      if (data && data.stat === 'Ok') {
+        return { isValid: true, user: data.uname || data.uid };
+      }
+      clearSession();
+      return { isValid: false, error: data?.emsg || 'Session rejected by broker' };
+    } catch (err: any) {
+      clearSession();
+      return { isValid: false, error: err.message };
+    }
   }
 
   /**
@@ -39,18 +61,31 @@ export class WcapiClient {
       ? endpoint
       : `${config.apiPrefix}${endpoint.replace(/^\/NorenWClient(API|Web)/, '')}`;
 
-    const response = await this.http.post<T>(targetEndpoint, payload, {
-      headers: {
-        Authorization: `Bearer ${session.susertoken}`,
-      },
-    });
+    try {
+      const response = await this.http.post<T>(targetEndpoint, payload, {
+        headers: {
+          Authorization: `Bearer ${session.susertoken}`,
+        },
+      });
 
-    const data: any = response.data;
-    if (data && data.stat === 'Not_Ok') {
-      throw new Error(`WCAPI Error [${targetEndpoint}]: ${data.emsg || 'Unknown error'}`);
+      const data: any = response.data;
+      if (data && data.stat === 'Not_Ok') {
+        const emsg = data.emsg || 'Unknown error';
+        if (emsg.includes('Session Expired') || emsg.includes('Invalid Session Key')) {
+          console.warn(`[WCAPI] Session expired or logged out at admin end: ${emsg}. Clearing dead session.`);
+          clearSession();
+        }
+        throw new Error(`WCAPI Error [${targetEndpoint}]: ${emsg}`);
+      }
+
+      return data;
+    } catch (err: any) {
+      if (err.response?.status === 401 || err.message?.includes('401')) {
+        console.warn(`[WCAPI] 401 Unauthorized received. Clearing dead session.`);
+        clearSession();
+      }
+      throw err;
     }
-
-    return data;
   }
 
   /**
