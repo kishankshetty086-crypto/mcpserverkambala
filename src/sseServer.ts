@@ -203,6 +203,8 @@ function createTradingMcpServer() {
   return server;
 }
 
+app.set('trust proxy', 1);
+
 // -------------------------------------------------------------
 // SSE ROUTES (FOR CLAUDE CONNECTORS)
 // -------------------------------------------------------------
@@ -215,7 +217,8 @@ app.get(['/', '/sse', '/mcp'], async (req, res) => {
       status: 'ok',
       name: 'kambala-trading',
       version: '1.0.0',
-      description: 'Kambala Solutions Remote MCP Server for Claude',
+      auth: 'none',
+      description: 'Kambala Solutions Remote MCP Server for Claude (No Sign-In Required)',
       endpoints: {
         root: '/',
         sse: '/sse',
@@ -258,74 +261,22 @@ app.get('/.well-known/mcp', (req, res) => {
     mcp_version: '1.0.0',
     transport: 'sse',
     endpoint: '/sse',
+    auth: {
+      type: 'none',
+    },
   });
 });
 
-// 4. OAuth 2.0 Discovery & Dynamic Client Registration (RFC 7591 / RFC 8414)
-// Allows Claude Web Custom Connector to auto-handshake or authenticate seamlessly
-app.get(['/.well-known/oauth-authorization-server', '/.well-known/openid-configuration'], (req, res) => {
-  const host = `${req.protocol}://${req.get('host')}`;
-  res.status(200).json({
-    issuer: host,
-    authorization_endpoint: `${host}/oauth/authorize`,
-    token_endpoint: `${host}/oauth/token`,
-    registration_endpoint: `${host}/oauth/register`,
-    response_types_supported: ['code'],
-    grant_types_supported: ['authorization_code'],
-    code_challenge_methods_supported: ['S256', 'plain'],
-  });
-});
-
-app.get('/.well-known/oauth-protected-resource', (req, res) => {
-  const host = `${req.protocol}://${req.get('host')}`;
-  res.status(200).json({
-    resource: host,
-    authorization_servers: [host],
-  });
-});
-
-// Dynamic Client Registration
-app.post(['/oauth/register', '/register'], (req, res) => {
-  console.log('[OAuth] Claude Dynamic Client Registration received');
-  res.status(201).json({
-    client_id: 'kambala-claude-client',
-    client_secret: 'kambala-claude-secret',
-    client_name: 'Claude Custom Connector',
-    redirect_uris: req.body?.redirect_uris || [],
-    grant_types: ['authorization_code'],
-    response_types: ['code'],
-  });
-});
-
-// OAuth Authorize flow
-app.get('/oauth/authorize', (req, res) => {
-  const redirectUri = req.query.redirect_uri as string;
-  const state = req.query.state as string;
-  console.log(`[OAuth] Authorize requested, redirecting back to ${redirectUri}`);
-  if (redirectUri) {
-    const target = new URL(redirectUri);
-    target.searchParams.set('code', 'kambala-auth-success');
-    if (state) target.searchParams.set('state', state);
-    return res.redirect(target.toString());
-  }
-  res.status(200).send('OAuth authorization successful. Return to Claude.');
-});
-
-// OAuth Token flow
-app.post('/oauth/token', (req, res) => {
-  console.log('[OAuth] Token exchange requested');
-  res.status(200).json({
-    access_token: 'kambala-session-active',
-    token_type: 'bearer',
-    expires_in: 86400,
-  });
+// Explicitly return 404 for OAuth discovery so Claude confirms the server requires NO sign-in
+app.all(['/.well-known/oauth-authorization-server', '/.well-known/openid-configuration', '/.well-known/oauth-protected-resource'], (req, res) => {
+  res.status(404).json({ error: 'OAuth not required. This server uses direct authenticated session.' });
 });
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`\n======================================================`);
   console.log(`  Kambala Remote MCP Server (SSE) Running on Port ${PORT}`);
+  console.log(`  Auth Mode: No sign-in required`);
   console.log(`  Claude Connector Endpoint: /sse or /mcp`);
-  console.log(`  OAuth Discovery: /.well-known/oauth-authorization-server`);
   console.log(`======================================================\n`);
 });
