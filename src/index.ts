@@ -303,6 +303,11 @@ server.tool(
 // SERVER STARTUP
 // -------------------------------------------------------------
 async function main() {
+  if (process.env.PORT || process.env.RENDER) {
+    console.log(`[Kambala MCP] Cloud Web Service detected on port ${process.env.PORT}. Starting SSE transport...`);
+    await import('./sseServer.js');
+    return;
+  }
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('[Kambala MCP] Server started on stdio transport.');
