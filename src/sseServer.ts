@@ -286,13 +286,39 @@ function createTradingMcpServer(reqHost?: string) {
     })
   );
 
+  // Universal Fallback Handler: Prevents any client request from failing with -32601 Method not found
+  server.server.fallbackRequestHandler = async (request: any) => {
+    console.log(`[MCP Fallback] Cleanly handling unmapped method: ${request.method} (id: ${request.id})`);
+    logEvent({ method: request.method, id: request.id, body: request.params });
+    if (request.method && request.method.endsWith('/list')) {
+      const key = request.method.split('/')[0];
+      return { [key]: [] };
+    }
+    return {};
+  };
+
   return server;
+}
+
+// In-memory debug log buffer
+const recentLogs: Array<{ time: string; method?: string; id?: any; url?: string; body?: any }> = [];
+function logEvent(item: { method?: string; id?: any; url?: string; body?: any }) {
+  recentLogs.unshift({ time: new Date().toISOString(), ...item });
+  if (recentLogs.length > 50) recentLogs.pop();
 }
 
 // Global HTTP Request Logger
 app.use((req, res, next) => {
   console.log(`[HTTP] ${req.method} ${req.originalUrl}`);
   next();
+});
+
+// Debug endpoint to view recent inbound MCP messages
+app.get('/debug/logs', (req, res) => {
+  res.json({
+    count: recentLogs.length,
+    logs: recentLogs,
+  });
 });
 
 // -------------------------------------------------------------
@@ -349,6 +375,7 @@ app.post(['/', '/messages', '/sse', '/mcp'], async (req, res) => {
   const method = req.body?.method || '(unknown method)';
   const id = req.body?.id;
   console.log(`[POST] Received message for sessionId: ${sessionId}, method: ${method}, id: ${id}`);
+  logEvent({ url: req.originalUrl, method, id, body: req.body });
   const transport = sessionId ? transports.get(sessionId) : transports.values().next().value;
 
   if (!transport) {
