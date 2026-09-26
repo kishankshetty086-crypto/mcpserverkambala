@@ -207,8 +207,24 @@ function createTradingMcpServer() {
 // SSE ROUTES (FOR CLAUDE CONNECTORS)
 // -------------------------------------------------------------
 
-// 1. Establish SSE Stream (handles /sse, /mcp)
-app.get(['/sse', '/mcp'], async (req, res) => {
+// 1. Establish SSE Stream (handles /, /sse, /mcp)
+app.get(['/', '/sse', '/mcp'], async (req, res) => {
+  // If GET / is requested by a normal browser without SSE Accept header, return health JSON
+  if (req.path === '/' && !req.headers.accept?.includes('text/event-stream')) {
+    return res.status(200).json({
+      status: 'ok',
+      name: 'kambala-trading',
+      version: '1.0.0',
+      description: 'Kambala Solutions Remote MCP Server for Claude',
+      endpoints: {
+        root: '/',
+        sse: '/sse',
+        mcp: '/mcp',
+        messages: '/messages',
+      },
+    });
+  }
+
   console.log(`[SSE] New connection from Claude client on ${req.path}`);
   const server = createTradingMcpServer();
   const transport = new SSEServerTransport('/messages', res);
@@ -224,7 +240,7 @@ app.get(['/sse', '/mcp'], async (req, res) => {
 });
 
 // 2. Handle incoming client messages
-app.post(['/messages', '/sse', '/mcp'], async (req, res) => {
+app.post(['/', '/messages', '/sse', '/mcp'], async (req, res) => {
   const sessionId = (req.query.sessionId as string) || (req.headers['x-session-id'] as string);
   const transport = sessionId ? transports.get(sessionId) : transports.values().next().value;
 
@@ -236,21 +252,7 @@ app.post(['/messages', '/sse', '/mcp'], async (req, res) => {
   await transport.handlePostMessage(req, res);
 });
 
-// 3. Health check & Discovery routes
-app.get('/', (req, res) => {
-  res.status(200).json({
-    status: 'ok',
-    name: 'kambala-trading',
-    version: '1.0.0',
-    description: 'Kambala Solutions Remote MCP Server for Claude',
-    endpoints: {
-      sse: '/sse',
-      mcp: '/mcp',
-      messages: '/messages',
-    },
-  });
-});
-
+// 3. Health check & MCP Discovery routes
 app.get('/.well-known/mcp', (req, res) => {
   res.status(200).json({
     mcp_version: '1.0.0',
@@ -259,10 +261,71 @@ app.get('/.well-known/mcp', (req, res) => {
   });
 });
 
+// 4. OAuth 2.0 Discovery & Dynamic Client Registration (RFC 7591 / RFC 8414)
+// Allows Claude Web Custom Connector to auto-handshake or authenticate seamlessly
+app.get(['/.well-known/oauth-authorization-server', '/.well-known/openid-configuration'], (req, res) => {
+  const host = `${req.protocol}://${req.get('host')}`;
+  res.status(200).json({
+    issuer: host,
+    authorization_endpoint: `${host}/oauth/authorize`,
+    token_endpoint: `${host}/oauth/token`,
+    registration_endpoint: `${host}/oauth/register`,
+    response_types_supported: ['code'],
+    grant_types_supported: ['authorization_code'],
+    code_challenge_methods_supported: ['S256', 'plain'],
+  });
+});
+
+app.get('/.well-known/oauth-protected-resource', (req, res) => {
+  const host = `${req.protocol}://${req.get('host')}`;
+  res.status(200).json({
+    resource: host,
+    authorization_servers: [host],
+  });
+});
+
+// Dynamic Client Registration
+app.post(['/oauth/register', '/register'], (req, res) => {
+  console.log('[OAuth] Claude Dynamic Client Registration received');
+  res.status(201).json({
+    client_id: 'kambala-claude-client',
+    client_secret: 'kambala-claude-secret',
+    client_name: 'Claude Custom Connector',
+    redirect_uris: req.body?.redirect_uris || [],
+    grant_types: ['authorization_code'],
+    response_types: ['code'],
+  });
+});
+
+// OAuth Authorize flow
+app.get('/oauth/authorize', (req, res) => {
+  const redirectUri = req.query.redirect_uri as string;
+  const state = req.query.state as string;
+  console.log(`[OAuth] Authorize requested, redirecting back to ${redirectUri}`);
+  if (redirectUri) {
+    const target = new URL(redirectUri);
+    target.searchParams.set('code', 'kambala-auth-success');
+    if (state) target.searchParams.set('state', state);
+    return res.redirect(target.toString());
+  }
+  res.status(200).send('OAuth authorization successful. Return to Claude.');
+});
+
+// OAuth Token flow
+app.post('/oauth/token', (req, res) => {
+  console.log('[OAuth] Token exchange requested');
+  res.status(200).json({
+    access_token: 'kambala-session-active',
+    token_type: 'bearer',
+    expires_in: 86400,
+  });
+});
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`\n======================================================`);
   console.log(`  Kambala Remote MCP Server (SSE) Running on Port ${PORT}`);
-  console.log(`  Claude Connector Endpoint: /sse`);
+  console.log(`  Claude Connector Endpoint: /sse or /mcp`);
+  console.log(`  OAuth Discovery: /.well-known/oauth-authorization-server`);
   console.log(`======================================================\n`);
 });
