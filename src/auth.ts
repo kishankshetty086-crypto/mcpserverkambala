@@ -81,6 +81,8 @@ export async function exchangeCodeForToken(code: string): Promise<SessionData> {
 
   const session: SessionData = {
     susertoken: data.susertoken,
+    uid: data.uid || data.USERID || process.env.TRADER_UID || 'KKSINV',
+    actid: data.actid || process.env.TRADER_ACTID || 'KKSINV',
     lastaccesstime: data.lastaccesstime,
     loginTime: new Date().toISOString(),
   };

@@ -3,7 +3,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { z } from 'zod';
 import { WcapiClient } from './wcapiClient.js';
-import { getStoredSession, saveSession } from './auth.js';
+import { getStoredSession, saveSession, exchangeCodeForToken } from './auth.js';
+import { config } from './config.js';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -324,6 +325,16 @@ app.get('/login', (req, res) => {
             : '⚠ <strong>No Active Session</strong><br/>Claude cannot execute trades until a valid Kambala session token is provided.'
           }
         </div>
+        <div style="margin: 20px 0; text-align: center;">
+          <a href="/oauth/kambala" style="display: block; background: #059669; color: white; text-decoration: none; padding: 13px; border-radius: 6px; font-weight: 600; font-size: 15px; box-shadow: 0 4px 10px rgba(5, 150, 105, 0.4);">
+            🔐 1-Click Login via Kambala Auth Page
+          </a>
+          <div style="margin: 16px 0; display: flex; align-items: center; color: #475569;">
+            <div style="flex: 1; height: 1px; background: #334155;"></div>
+            <span style="padding: 0 10px; font-size: 12px; text-transform: uppercase;">or manual paste</span>
+            <div style="flex: 1; height: 1px; background: #334155;"></div>
+          </div>
+        </div>
         <form action="/login" method="POST">
           <label>Trader User ID (uid)</label>
           <input name="uid" value="${session?.uid || 'KKSINV'}" required />
@@ -353,6 +364,73 @@ app.post('/login', express.urlencoded({ extended: true }), (req, res) => {
   });
   console.log(`[Session] New session activated for user ${uid || 'KKSINV'}`);
   res.redirect('/login');
+});
+
+// 5. 1-Click Kambala OAuth Redirect Flow
+app.get('/oauth/kambala', (req, res) => {
+  const redirectUri = process.env.REDIRECT_URI || `${req.protocol}://${req.get('host')}/oauth/callback`;
+  const authUrl = `${config.oauthAuthUrl}?client_id=${config.clientId}&redirect_uri=${encodeURIComponent(redirectUri)}`;
+  console.log(`[OAuth] Redirecting trader to Kambala Auth Page: ${authUrl}`);
+  res.redirect(authUrl);
+});
+
+// 6. Kambala OAuth Callback Interceptor (exchanges code for access_token / susertoken)
+app.get('/oauth/callback', async (req, res) => {
+  const code = req.query.code as string;
+  if (!code) {
+    return res.status(400).send(`
+      <div style="font-family:sans-serif; text-align:center; padding:40px;">
+        <h2 style="color:red;">Login Failed</h2>
+        <p>Missing 'code' query parameter in OAuth callback from Kambala.</p>
+      </div>
+    `);
+  }
+
+  try {
+    console.log(`[OAuth] Intercepted authorization code: ${code}. Requesting GenAcsTok from WCAPI...`);
+    const session = await exchangeCodeForToken(code);
+    console.log(`[OAuth] Token generated successfully for user: ${session.uid}`);
+
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Kambala Login Success</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; }
+          .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 36px; max-width: 480px; width: 100%; box-shadow: 0 10px 25px rgba(0,0,0,0.5); text-align: center; }
+          h1 { color: #10b981; font-size: 24px; margin-bottom: 8px; }
+          p { color: #94a3b8; font-size: 15px; line-height: 1.6; }
+          .box { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 14px; margin: 20px 0; font-size: 13px; text-align: left; }
+          .btn { display: inline-block; background: #2563eb; color: white; text-decoration: none; padding: 12px 24px; border-radius: 6px; font-weight: 600; margin-top: 10px; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h1>✓ Login Successful!</h1>
+          <p>Kambala WCAPI access token has been generated and securely stored in your server's session vault.</p>
+          <div class="box">
+            <div><strong>Trader User ID:</strong> ${session.uid || 'KKSINV'}</div>
+            <div style="margin-top: 6px;"><strong>Token:</strong> ${session.susertoken.slice(0, 10)}...${session.susertoken.slice(-6)}</div>
+            <div style="margin-top: 6px;"><strong>Session Active Since:</strong> ${new Date(session.loginTime).toLocaleTimeString()}</div>
+          </div>
+          <p>You can now return to <strong>Claude</strong> and begin trading!</p>
+          <a href="/login" class="btn">View Session Manager</a>
+        </div>
+      </body>
+      </html>
+    `);
+  } catch (err: any) {
+    console.error(`[OAuth] Token exchange error:`, err);
+    res.status(500).send(`
+      <div style="font-family:sans-serif; text-align:center; padding:40px;">
+        <h2 style="color:red;">Token Exchange Error</h2>
+        <p>${err.message}</p>
+        <p><a href="/login">Return to Session Manager</a></p>
+      </div>
+    `);
+  }
 });
 
 const PORT = process.env.PORT || 3001;
