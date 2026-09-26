@@ -5,6 +5,20 @@ import { z } from 'zod';
 import { WcapiClient } from './wcapiClient.js';
 
 const app = express();
+app.use(express.json());
+
+// Enable CORS for Claude Web (claude.ai)
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
+  res.header('Access-Control-Allow-Headers', '*');
+  res.header('Access-Control-Expose-Headers', '*');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 const client = new WcapiClient();
 
 // Map to store active SSE transports by sessionId
@@ -193,9 +207,9 @@ function createTradingMcpServer() {
 // SSE ROUTES (FOR CLAUDE CONNECTORS)
 // -------------------------------------------------------------
 
-// 1. Establish SSE Stream
-app.get('/sse', async (req, res) => {
-  console.log('[SSE] New connection from Claude client');
+// 1. Establish SSE Stream (handles /sse, /mcp)
+app.get(['/sse', '/mcp'], async (req, res) => {
+  console.log(`[SSE] New connection from Claude client on ${req.path}`);
   const server = createTradingMcpServer();
   const transport = new SSEServerTransport('/messages', res);
 
@@ -210,21 +224,39 @@ app.get('/sse', async (req, res) => {
 });
 
 // 2. Handle incoming client messages
-app.post('/messages', async (req, res) => {
-  const sessionId = req.query.sessionId as string;
-  const transport = transports.get(sessionId);
+app.post(['/messages', '/sse', '/mcp'], async (req, res) => {
+  const sessionId = (req.query.sessionId as string) || (req.headers['x-session-id'] as string);
+  const transport = sessionId ? transports.get(sessionId) : transports.values().next().value;
 
   if (!transport) {
-    res.status(404).send('Session not found or expired');
+    res.status(404).json({ error: 'Session not found or expired' });
     return;
   }
 
   await transport.handlePostMessage(req, res);
 });
 
-// Health check / welcome route
+// 3. Health check & Discovery routes
 app.get('/', (req, res) => {
-  res.send('<h3>Kambala Remote MCP Server (SSE) is Active!</h3><p>SSE Endpoint: <code>/sse</code></p>');
+  res.status(200).json({
+    status: 'ok',
+    name: 'kambala-trading',
+    version: '1.0.0',
+    description: 'Kambala Solutions Remote MCP Server for Claude',
+    endpoints: {
+      sse: '/sse',
+      mcp: '/mcp',
+      messages: '/messages',
+    },
+  });
+});
+
+app.get('/.well-known/mcp', (req, res) => {
+  res.status(200).json({
+    mcp_version: '1.0.0',
+    transport: 'sse',
+    endpoint: '/sse',
+  });
 });
 
 const PORT = process.env.PORT || 3001;
