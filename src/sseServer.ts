@@ -27,7 +27,7 @@ const client = new WcapiClient();
 // Map to store active SSE transports by sessionId
 const transports = new Map<string, SSEServerTransport>();
 
-function createTradingMcpServer() {
+function createTradingMcpServer(reqHost?: string) {
   const server = new McpServer({
     name: 'kambala-trading',
     version: '1.0.0',
@@ -44,17 +44,66 @@ function createTradingMcpServer() {
     };
   }
 
+  function getLoginUrl() {
+    return reqHost
+      ? `https://${reqHost}/oauth/kambala`
+      : `${config.oauthAuthUrl}?client_id=${config.clientId}&redirect_uri=${encodeURIComponent(config.redirectUri)}`;
+  }
+
   function errorResponse(err: any) {
+    const errMsg = err?.message || String(err);
+    const isAuthError =
+      errMsg.includes('Session Expired') ||
+      errMsg.includes('Invalid Session Key') ||
+      errMsg.includes('Not authenticated') ||
+      errMsg.includes('Token generation failed') ||
+      errMsg.includes('401') ||
+      errMsg.includes('403');
+
+    if (isAuthError) {
+      const loginUrl = getLoginUrl();
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text' as const,
+            text:
+              `⚠️ KAMBALA SESSION EXPIRED / AUTHENTICATION REQUIRED\n\n` +
+              `Your Kambala WCAPI session is not active. Please provide this login link to the user:\n\n` +
+              `👉 [Click here to Log in to Kambala](${loginUrl})\n\n` +
+              `Or direct URL: ${loginUrl}\n\n` +
+              `Once the user logs in with their Kambala User ID, Password, and TOTP, the session token will be saved automatically.\n\n` +
+              `(Diagnostic reason: ${errMsg})`,
+          },
+        ],
+      };
+    }
+
     return {
       isError: true,
       content: [
         {
           type: 'text' as const,
-          text: `Error: ${err.message || String(err)}`,
+          text: `Error: ${errMsg}`,
         },
       ],
     };
   }
+
+  // 0. Get Login URL
+  server.tool(
+    'get_login_url',
+    'Get the Kambala OAuth login link to sign in or renew an expired session.',
+    {},
+    async () => {
+      const loginUrl = getLoginUrl();
+      return jsonResponse({
+        action: 'LOGIN_REQUIRED',
+        loginUrl: loginUrl,
+        instruction: `Click this link to authenticate with Kambala: ${loginUrl}. Once signed in, you can query your portfolio and place orders.`,
+      });
+    }
+  );
 
   // 1. Account Profile
   server.tool('get_user_profile', 'Get logged-in trader account profile and trading segment details.', {}, async () => {
@@ -236,7 +285,7 @@ app.get(['/', '/sse', '/mcp'], async (req, res) => {
   }
 
   console.log(`[SSE] New connection from Claude client on ${req.path}`);
-  const server = createTradingMcpServer();
+  const server = createTradingMcpServer(req.get('host'));
   const transport = new SSEServerTransport('/messages', res);
 
   transports.set(transport.sessionId, transport);
